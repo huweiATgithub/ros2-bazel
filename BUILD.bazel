@@ -1,0 +1,18 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_static_library", "rust_test")
+rust_static_library(name = "rust_math", srcs = ["src/math.rs"], crate_root = "src/math.rs", edition = "2021")
+rust_test(name = "rust_math_test", crate = ":rust_math")
+cc_binary(name = "producer", srcs = ["src/producer.cc"], deps = [":rust_math", "@rclcpp//:rclcpp_library", "@std_msgs//:cc", "@std_srvs//:cc"])
+cc_binary(name = "observer", srcs = ["src/observer.cc"], deps = ["@rclcpp//:rclcpp_library", "@std_msgs//:cc"])
+cc_binary(name = "client", srcs = ["src/client.cc"], deps = ["@rclcpp//:rclcpp_library", "@std_srvs//:cc"])
+py_test(
+    name = "launch_integration_test",
+    srcs = ["tests/launch_runner.py", "tests/integration.py"],
+    main = "tests/launch_runner.py",
+    args = ["$(rootpath tests/integration.py)", "$(rootpath :producer)", "$(rootpath :observer)", "$(rootpath :client)"],
+    data = [":producer", ":observer", ":client"],
+    deps = ["@launch//:launch", "@launch_testing//:launch_testing"],
+    timeout = "moderate",
+    tags = ["requires-network"],
+)

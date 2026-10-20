@@ -1,0 +1,14 @@
+common --registry=https://bazel.ros.org
+common --registry=https://bcr.bazel.build
+common --check_direct_dependencies=off
+common --incompatible_default_to_explicit_init_py
+common --incompatible_strict_action_env
+build --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+build --repo_env=PIP_CONFIG_FILE=/dev/null
+build --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
+build --@llvm//config:experimental_stub_libgcc_s=True
+build --@rosdistro//:rmw=rmw_cyclonedds_cpp
+build --dynamic_mode=off
+build --define=TMPDIR=/tmp
+build --jobs=4
+build --remote_upload_local_results=false

@@ -1,0 +1,38 @@
+name: Ubuntu 24.04 ROS core and Rust
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify OS and install build prerequisites
+        run: |
+          . /etc/os-release
+          test "$ID" = ubuntu && test "$VERSION_ID" = 24.04
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates unzip zip xz-utils
+      - name: Install pinned Bazelisk
+        run: |
+          curl -fL https://github.com/bazelbuild/bazelisk/releases/download/v1.27.0/bazelisk-linux-amd64 -o "$RUNNER_TEMP/bazel"
+          echo 'e1508323f347ad1465a887bc5d2bfb91cffc232d11e8e997b623227c6b32fb76  '"$RUNNER_TEMP/bazel" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bazel"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build C++ and Rust, then run unit and launch tests
+        run: |
+          bazel version
+          bazel test //:rust_math_test //:launch_integration_test --test_output=errors --nocache_test_results
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu24-test-results
+          path: |
+            bazel-testlogs/**/test.log
+            bazel-testlogs/**/test.xml
+          if-no-files-found: warn
