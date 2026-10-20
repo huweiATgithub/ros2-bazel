@@ -12,12 +12,14 @@ py_test(
         "$(rootpath //apps/producer:producer)",
         "$(rootpath //apps/observer:observer)",
         "$(rootpath //apps/client:client)",
+        "$(rootpath //apps/python_observer:python_observer)",
     ],
     # Executables are runtime inputs, not Python import dependencies.
     data = [
         "//apps/client:client",
         "//apps/observer:observer",
         "//apps/producer:producer",
+        "//apps/python_observer:python_observer",
     ],
     visibility = ["//:__pkg__"],
     deps = [

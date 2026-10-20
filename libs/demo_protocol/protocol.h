@@ -10,7 +10,7 @@ namespace demo_protocol {
 constexpr char kSamplesTopic[] = "samples";
 constexpr char kCalculateService[] = "calculate";
 constexpr std::uint64_t kSampleCount = 40;
-constexpr std::size_t kSubscriberCount = 2;
+constexpr std::size_t kSubscriberCount = 3;
 constexpr std::size_t kServiceCallCount = 12;
 }  // namespace demo_protocol
 

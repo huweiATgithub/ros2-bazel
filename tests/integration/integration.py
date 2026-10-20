@@ -1,4 +1,4 @@
-"""Real DDS, two independent receivers and repeated Rust-backed service calls."""
+"""Real DDS, C++/Python receivers with custom messages and repeated Rust-backed service calls."""
 import os
 import unittest
 import launch
@@ -22,22 +22,25 @@ def generate_test_description():
         )
     first = process("observer_one", "DEMO_OBSERVER")
     second = process("observer_two", "DEMO_OBSERVER")
+    python_observer = process("python_observer", "DEMO_PYTHON_OBSERVER")
     client = process("service_verifier", "DEMO_CLIENT")
     producer = process("rust_producer", "DEMO_PRODUCER")
     return launch.LaunchDescription([
-        first, second, client,
+        first, second, python_observer, client,
         # Exercise clients waiting for late server discovery, not just happy startup order.
         TimerAction(period=1.0, actions=[producer]), ReadyToTest(),
-    ]), {"first": first, "second": second, "client": client, "producer": producer}
+    ]), {"first": first, "second": second, "client": client, "producer": producer, "python_observer": python_observer}
 
 
 class CommunicationTests(unittest.TestCase):
-    def test_pubsub_and_services(self, proc_output, proc_info, first, second, client, producer):
+    def test_pubsub_and_services(self, proc_output, proc_info, first, second, client, producer, python_observer):
         proc_output.assertWaitFor("ABSENT_SERVICE_TIMEOUT_OK", process=client, stream="stdout", timeout=15)
         proc_output.assertWaitFor("PUBLISHED 40", process=producer, stream="stdout", timeout=40)
         for observer in (first, second):
-            proc_output.assertWaitFor("RECEIVED 40 CHECKSUM 23160", process=observer, stream="stdout", timeout=15)
+            proc_output.assertWaitFor("RECEIVED 40 CHECKSUM 23160 CUSTOM_FIELDS_OK", process=observer, stream="stdout", timeout=15)
             proc_info.assertWaitForShutdown(process=observer, timeout=10)
+        proc_output.assertWaitFor("PYTHON_RECEIVED 40 CHECKSUM 23160 CUSTOM_FIELDS_OK", process=python_observer, stream="stdout", timeout=15)
+        proc_info.assertWaitForShutdown(process=python_observer, timeout=10)
         proc_output.assertWaitFor("SERVICE_PASS 12", process=client, stream="stdout", timeout=15)
         proc_info.assertWaitForShutdown(process=client, timeout=10)
 

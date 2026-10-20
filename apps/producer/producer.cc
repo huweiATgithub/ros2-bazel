@@ -1,7 +1,8 @@
 #include "libs/demo_protocol/protocol.h"
 #include "libs/rust_math/math.h"
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/u_int64_multi_array.hpp>
+#include <demo_interfaces/msg/sample.hpp>
+#include <vector>
 #include <std_srvs/srv/set_bool.hpp>
 #include <chrono>
 #include <cstdint>
@@ -10,7 +11,7 @@ using namespace std::chrono_literals;
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<rclcpp::Node>("rust_backed_producer");
-  auto publisher = node->create_publisher<std_msgs::msg::UInt64MultiArray>(
+  auto publisher = node->create_publisher<demo_interfaces::msg::Sample>(
       demo_protocol::kSamplesTopic, rclcpp::QoS(100).reliable());
   size_t requests = 0;
   auto service = node->create_service<std_srvs::srv::SetBool>(demo_protocol::kCalculateService,
@@ -22,12 +23,22 @@ int main(int argc, char** argv) {
         std::cout << "SERVICE " << ++requests << " " << response->message << std::endl;
       });
   uint64_t sequence = 0;
+  std::vector<uint64_t> history;
   auto timer = node->create_wall_timer(25ms, [&] {
-    // No samples are sent until both independent subscribers are discovered.
+    // Discover both C++ observers and the independent Python observer first.
     if (publisher->get_subscription_count() < demo_protocol::kSubscriberCount ||
         sequence == demo_protocol::kSampleCount) return;
-    std_msgs::msg::UInt64MultiArray msg;
-    msg.data = {sequence, ros_demo_transform(sequence)};
+    demo_interfaces::msg::Sample msg;
+    msg.sequence = sequence;
+    // Deterministic simulated 25 ms acquisition times, not wall-clock time.
+    msg.stamp.sec = 1700000000;
+    msg.stamp.nanosec = static_cast<uint32_t>(sequence * 25000000);
+    msg.source = "rust_transform";
+    msg.calculation.input = sequence;
+    msg.calculation.output = ros_demo_transform(sequence);
+    history.push_back(msg.calculation.output);
+    if (history.size() > 3) history.erase(history.begin());
+    msg.recent_outputs = history;
     publisher->publish(msg);
     if (++sequence == demo_protocol::kSampleCount) std::cout << "PUBLISHED 40" << std::endl;
   });

@@ -11,7 +11,7 @@ cc_binary(
         "//libs/demo_protocol:protocol",
         "//libs/rust_math:rust_math",
         "@rclcpp//:rclcpp_library",
-        "@std_msgs//:cc",
+        "//interfaces/demo_interfaces:cc",
         "@std_srvs//:cc",
     ],
 )

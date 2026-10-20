@@ -23,7 +23,7 @@ jobs:
         uses: bazelbuild/setup-bazelisk@v3
       - name: Download Bazel and start server (measured separately)
         run: python3 tools/ci/time_command.py ci-profiles/bazel-startup.time.json bazel version
-      - name: Build C++ and Rust applications (cold runner)
+      - name: Build C++, Rust and Python applications (cold runner)
         run: bash tools/ci/profile_bazel.sh cold-build build //examples/cli:demo
       - name: Repeat unchanged build (same workspace, warm cache)
         run: |

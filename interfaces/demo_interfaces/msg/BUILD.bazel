@@ -1,0 +1,21 @@
+load("@rosidl_default_generators//:defs.bzl", "ros_message")
+
+package(default_visibility = ["//interfaces/demo_interfaces:__pkg__"])
+
+# Explicit ROS namespace: independent of this Bazel directory and root module name.
+ros_message(
+    name = "Calculation",
+    src = "Calculation.msg",
+    package = "demo_interfaces",
+)
+
+ros_message(
+    name = "Sample",
+    src = "Sample.msg",
+    package = "demo_interfaces",
+    deps = [
+        ":Calculation",
+        "@builtin_interfaces//msg:Time",
+    ],
+)
+

@@ -9,11 +9,11 @@ A core-only compatibility experiment with [ROS Central Registry](https://github.
 ## What the test proves
 
 - A C++ ROS node statically links a Rust library through a small C ABI.
-- Rust computes `n² + 3n + 7`; the node publishes 40 numbered results after discovering two independent C++ subscribers.
-- Each subscriber checks every sequence number and result with an independent C++ oracle, then checks checksum 23160. Missing, reordered or corrupt samples fail.
+- Rust computes `n² + 3n + 7`; the C++ node publishes 40 custom `demo_interfaces/msg/Sample` messages after discovering two C++ subscribers and one Python subscriber.
+- The C++ and Python subscribers independently check every field: sequence, simulated timestamp, source, nested calculation and rolling output history, then checksum 23160. Missing, reordered or corrupt samples fail.
 - A C++ client verifies an absent-service timeout, waits for a delayed server, and checks 12 alternating service calls against exact expected Rust results.
-- Python ROS `launch_testing` manages the four processes, asserts their observable results and checks all exit codes, including graceful server shutdown.
-- Rust unit tests also run as a Bazel test.
+- Python ROS `launch_testing` manages the five processes, asserts their observable results and checks all exit codes, including graceful server shutdown.
+- Generated Python schema/CDR serialization tests and Rust unit tests also run as Bazel tests.
 
 ## Run
 
@@ -31,7 +31,8 @@ One root `MODULE.bazel` owns external dependencies and toolchains. Each director
 
 ```text
 MODULE.bazel                    # one Bzlmod module, shared toolchains/dependency versions
-BUILD.bazel                     # //:tests aggregates the two test targets
+BUILD.bazel                     # //:tests aggregates three test targets
+interfaces/demo_interfaces/    # :cc and :py generate bindings from msg/*.msg
 libs/
   demo_protocol/                # :protocol, shared C++ topic/service names and counts
   rust_math/                    # :rust_math C API, private :rust_math_impl, :rust_math_test
@@ -39,28 +40,32 @@ apps/
   producer/                     # :producer, C++ ROS node calling Rust
   observer/                     # :observer, independent C++ result verifier
   client/                       # :client, C++ service verifier
+  python_observer/              # :python_observer, independent Python custom-type verifier
+tests/interfaces/               # :bindings_test, schema and CDR round trips
 tests/integration/              # :launch_integration_test, Python process-level test
 examples/cli/                   # :demo build aggregate plus run_cli_demo.sh
 ```
 
-A [Bazel package](https://bazel.build/concepts/build-ref#packages) is a source/build boundary, not a separate Bzlmod module. A [Bzlmod module](https://bazel.build/external/module) is the dependency-versioning unit described by `MODULE.bazel`; do not add one per local package. A ROS package normally has `package.xml` metadata for the ROS ecosystem. These local packages deliberately use Bazel only, not a colcon/ament workspace; ROS dependencies such as `rclcpp`, `std_msgs`, and `std_srvs` come from RCR as external modules. The terms are not interchangeable.
+A [Bazel package](https://bazel.build/concepts/build-ref#packages) is a source/build boundary, not a separate Bzlmod module. A [Bzlmod module](https://bazel.build/external/module) is the dependency-versioning unit described by `MODULE.bazel`; do not add one per local package. A ROS package normally has `package.xml` metadata for the ROS ecosystem. These local packages deliberately use Bazel only, not a colcon/ament workspace; ROS dependencies such as `rclcpp`, `rclpy`, `builtin_interfaces`, and `std_srvs` come from RCR as external modules. The terms are not interchangeable.
 
 The local dependency graph is small and explicit:
 
 ```text
 apps/producer:producer -> libs/rust_math:rust_math -> :rust_math_impl (Rust)
                       -> libs/demo_protocol:protocol
-apps/observer:observer -> libs/demo_protocol:protocol
+                      -> interfaces/demo_interfaces:cc
+apps/observer:observer -> libs/demo_protocol:protocol + interfaces/demo_interfaces:cc
+apps/python_observer:python_observer -> interfaces/demo_interfaces:py + @rclpy
 apps/client:client     -> libs/demo_protocol:protocol
-tests/integration:launch_integration_test --data--> all three application binaries
-examples/cli:demo --srcs--> CLI script + all three application binaries
+tests/integration:launch_integration_test --data--> all four application targets
+examples/cli:demo --srcs--> CLI script + all four application targets
 ```
 
 For example, `apps/producer/BUILD.bazel` declares `deps = ["//libs/rust_math:rust_math", "//libs/demo_protocol:protocol", ...]`. The prefix `//` means this repository, `libs/rust_math` is the package, and `rust_math` after `:` is the target. Inside that library package, `:rust_math_impl` is a same-package label. `@rclcpp//:rclcpp_library` instead refers to an external repository.
 
-The C++ `rust_math` interface exports `math.h` and transitively links the private Rust static library. Only the producer package can depend on it. The protocol library permits the three app packages; the binaries permit the integration-test and CLI-example packages. These [visibility](https://bazel.build/concepts/visibility) declarations enforce the boundaries rather than making everything public. They restrict dependencies, not explicit command-line builds.
+The C++ `rust_math` interface exports `math.h` and transitively links the private Rust static library. Only the producer package can depend on it. The protocol library permits the three C++ app packages; the generated bindings permit only their language consumers and tests; the executables permit the integration-test and CLI-example packages. These [visibility](https://bazel.build/concepts/visibility) declarations enforce the boundaries rather than making everything public. They restrict dependencies, not explicit command-line builds.
 
-The integration test declares executables in `data`, not `deps`, because they are runtime processes rather than Python imports. Its `$(rootpath //apps/producer:producer)` arguments resolve the declared binaries in Bazel's runfiles tree. The shared protocol header contains names and counts only: the observers' formula/checksum and the client's expected service responses remain independent of Rust.
+The integration test declares executables in `data`, not `deps`, because they are runtime processes rather than Python imports. Its `$(rootpath //apps/producer:producer)` arguments resolve the declared binaries in Bazel's runfiles tree. The shared protocol header contains names and counts only: the observers' formula/checksum and the client's expected service responses remain independent of Rust. The Python observer has its own constants and oracle to catch cross-language mismatches.
 
 Try the package-qualified targets and inspect their dependencies:
 
@@ -71,6 +76,30 @@ bazel test //tests/integration:launch_integration_test --test_output=errors
 bazel query 'labels(deps, //apps/producer:producer)'
 bazel query 'labels(deps, //libs/rust_math:rust_math)'
 ```
+
+## Custom interfaces: definition → generation → consumers
+
+[`interfaces/demo_interfaces`](interfaces/demo_interfaces/BUILD.bazel) owns the language targets, with a small [`msg` subpackage](interfaces/demo_interfaces/msg/BUILD.bazel) for definitions. Its ROS interface namespace is explicitly `demo_interfaces`, not the root Bzlmod module name or filesystem directory.
+
+- [`msg/Calculation.msg`](interfaces/demo_interfaces/msg/Calculation.msg) defines an input/output pair.
+- [`msg/Sample.msg`](interfaces/demo_interfaces/msg/Sample.msg) combines primitives, a `builtin_interfaces/Time`, a nested `Calculation`, and a variable-length `uint64[]` history.
+- `ros_message` declares each definition and its direct interface dependencies. `Sample` in the `msg` subpackage depends on `:Calculation` and `@builtin_interfaces//msg:Time`.
+- RCR's `cc_ros_library(name = "cc", ...)` and `py_ros_library(name = "py", ...)` generate language bindings and serialization/typesupport through the same dependency graph. No generated files are checked in and no colcon/CMake step runs.
+- Separate C++ packages depend on `//interfaces/demo_interfaces:cc` and include `<demo_interfaces/msg/sample.hpp>`. The Python package depends on `//interfaces/demo_interfaces:py` and imports `from demo_interfaces.msg import Sample`.
+
+The Python executable uses `@aspect_rules_py//py:defs.bzl`, as required by [RCR's Python example](https://github.com/openrobotics/ros-central-registry/blob/main/examples/BUILD.bazel), for namespace-package imports and RCR's `sitecustomize` hook. The launch harness uses ordinary `rules_python` because it starts processes rather than importing generated messages. Rust remains a plain library called through C++ FFI; this demo does not require Rust ROS bindings.
+
+```sh
+# Generate/compile each language's bindings, or build consumers transitively.
+bazel build //interfaces/demo_interfaces:cc //interfaces/demo_interfaces:py
+bazel build //apps/producer:producer //apps/python_observer:python_observer
+bazel test //tests/interfaces:bindings_test --test_output=errors
+bazel test //tests/integration:launch_integration_test --test_output=errors
+```
+
+The fixture uses deterministic simulated timestamps (epoch second 1700000000, 25 ms per sequence), source `rust_transform`, and the last up to three Rust outputs. These are test data, not wall-clock acquisition times. The schema/serialization test covers exact generated field types, nested messages, empty/nonempty sequences and the `uint64` boundary. The DDS test checks all 40 messages in both languages, not just successful imports.
+
+To add a type, write another `.msg`, declare a `ros_message` with `package = "demo_interfaces"` and explicit dependencies, then add it to the language targets' `deps` if it is not already transitively reachable. Consumers depend on generated language targets, never copy generated headers or Python files. These are Bazel packages and ROS interface namespaces, not an installable colcon workspace.
 
 ## How it works
 
@@ -87,9 +116,9 @@ bazel build //examples/cli:demo
 timeout --signal=TERM --kill-after=5s 60s bash examples/cli/run_cli_demo.sh
 ```
 
-`//examples/cli:demo` is a build-only `filegroup` whose `srcs` aggregate the script and all three binaries. The [CLI example](examples/cli/run_cli_demo.sh) runs `./bazel-bin/apps/producer/producer`, two copies of `./bazel-bin/apps/observer/observer`, and `./bazel-bin/apps/client/client` directly, without `bazel run`, `launch_testing`, `ros2 run` or sourcing ROS. It checks all four exit codes, both subscribers' `RECEIVED 40 CHECKSUM 23160`, the client's `SERVICE_PASS 12`, and the producer's output, then shuts the producer down. Logs are saved in `cli-logs/`. CI runs these same commands after the build, separately from the Bazel tests. It uses localhost discovery and domain 94 by default; choose a different unused domain with `ROS_DOMAIN_ID=95 timeout ...` for a concurrent run.
+`//examples/cli:demo` is a build-only `filegroup` whose `srcs` aggregate the script and all four application targets. The [CLI example](examples/cli/run_cli_demo.sh) runs `./bazel-bin/apps/producer/producer`, two copies of `./bazel-bin/apps/observer/observer`, `./bazel-bin/apps/python_observer/python_observer`, and `./bazel-bin/apps/client/client` directly, without `bazel run`, `launch_testing`, `ros2 run` or sourcing ROS. It checks all five exit codes, both C++ subscribers' `RECEIVED 40 CHECKSUM 23160 CUSTOM_FIELDS_OK`, the Python subscriber's equivalent `PYTHON_RECEIVED` line, the client's `SERVICE_PASS 12`, and the producer's output, then shuts the producer down. Logs are saved in `cli-logs/`. CI runs these same commands after the build, separately from the Bazel tests. It uses localhost discovery and domain 94 by default; choose a different unused domain with `ROS_DOMAIN_ID=95 timeout ...` for a concurrent run.
 
-For interactive use, set the same environment in **four terminals**, all at the repository root:
+For interactive use, set the same environment in **five terminals**, all at the repository root:
 
 ```sh
 export ROS_DOMAIN_ID=94 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
@@ -97,12 +126,13 @@ export ROS_DOMAIN_ID=94 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ./bazel-bin/apps/producer/producer
 ./bazel-bin/apps/observer/observer --ros-args -r __node:=observer_one
 ./bazel-bin/apps/observer/observer --ros-args -r __node:=observer_two
+./bazel-bin/apps/python_observer/python_observer
 ./bazel-bin/apps/client/client
 ```
 
-Start all four within 25 seconds. After both observers and the client finish successfully, press Ctrl-C in the producer terminal. The producer waits for two subscribers and expects exactly 12 service calls before a successful shutdown. Alternatively, `bazel run //apps/producer:producer -- --ros-args -r __node:=my_producer` builds and starts that target in Bazel's runtime context, passing arguments after `--`.
+Start all five within 25 seconds. After all three observers and the client finish successfully, press Ctrl-C in the producer terminal. The producer waits for three subscribers and expects exactly 12 service calls before a successful shutdown. Alternatively, `bazel run //apps/producer:producer -- --ros-args -r __node:=my_producer` builds and starts that target in Bazel's runtime context, passing arguments after `--`.
 
-Keep the build outputs and adjacent runfiles together. Direct execution of these C++ demos does not mean every ROS/Python/plugin target is a standalone file; declare its runtime data and package the complete runtime tree for deployment. See RCR's [runtime-data](https://github.com/openrobotics/ros-central-registry#runtime-data) and [static-compilation](https://github.com/openrobotics/ros-central-registry#static-compilation) explanations.
+Keep the build outputs and adjacent runfiles together. The Python executable is a Bazel-generated launcher with a managed runtime, not a standalone `.py` file. Direct execution does not make every ROS/Python/plugin target a standalone file; declare its runtime data and package the complete runtime tree for deployment. See RCR's [runtime-data](https://github.com/openrobotics/ros-central-registry#runtime-data) and [static-compilation](https://github.com/openrobotics/ros-central-registry#static-compilation) explanations.
 
 ## Versions and scope
 
@@ -111,6 +141,8 @@ The root requests `ros_core lyrical.2026-06-08.rcr.2`. Bazel minimum-version sel
 The registry's full module graph contains optional desktop dependencies, but this repository does not build its desktop examples. Runtime binaries link only the selected core dependencies and Rust logic. `--dynamic_mode=off` does not make glibc fully static.
 
 ## Build profiling in CI
+
+The [measured baseline report](docs/build-profile.md) analyzes commit `0a7f216`, before custom-message/Python-consumer support. It records a 344.26 s cold build versus 3.48 s and 0.43 s unchanged same-workspace repeats; these are not cross-runner cache results. New runs retain the same instrumentation.
 
 CI measures the initial application build on a fresh Ubuntu 24.04 runner, then repeats the identical build twice in the same workspace/server to show warm-cache behavior. Test execution is still forced with `--nocache_test_results`; the direct CLI check remains separate. This is not a cross-runner cache benchmark.
 
