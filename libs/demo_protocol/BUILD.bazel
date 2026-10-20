@@ -1,0 +1,11 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "protocol",
+    hdrs = ["protocol.h"],
+    visibility = [
+        "//apps/client:__pkg__",
+        "//apps/observer:__pkg__",
+        "//apps/producer:__pkg__",
+    ],
+)

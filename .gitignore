@@ -2,3 +2,4 @@ bazel-*
 __pycache__/
 *.pyc
 cli-logs/
+ci-profiles/

@@ -15,18 +15,38 @@ jobs:
         run: |
           . /etc/os-release
           test "$ID" = ubuntu && test "$VERSION_ID" = 24.04
-          sudo apt-get update
-          sudo apt-get install -y curl ca-certificates unzip zip xz-utils
+          mkdir -p ci-profiles
+          { uname -a; nproc; free -h; } > ci-profiles/runner.txt
+          python3 tools/ci/time_command.py ci-profiles/apt-setup.time.json \
+            bash -c 'sudo apt-get update && sudo apt-get install -y curl ca-certificates unzip zip xz-utils'
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
-      - name: Build C++ and Rust applications
+      - name: Download Bazel and start server (measured separately)
+        run: python3 tools/ci/time_command.py ci-profiles/bazel-startup.time.json bazel version
+      - name: Build C++ and Rust applications (cold runner)
+        run: bash tools/ci/profile_bazel.sh cold-build build //examples/cli:demo
+      - name: Repeat unchanged build (same workspace, warm cache)
         run: |
-          bazel version
-          bazel build //:producer //:observer //:client
-      - name: Run unit and launch tests with Bazel
-        run: bazel test //:rust_math_test //:launch_integration_test --test_output=errors --nocache_test_results
+          bash tools/ci/profile_bazel.sh warm-build-1 build //examples/cli:demo
+          bash tools/ci/profile_bazel.sh warm-build-2 build //examples/cli:demo
+      - name: Run unit and launch tests with Bazel (force execution)
+        run: bash tools/ci/profile_bazel.sh tests test //:tests --test_output=errors --nocache_test_results
       - name: Run built applications directly from the CLI
-        run: timeout --signal=TERM --kill-after=5s 60s bash examples/run_cli_demo.sh
+        run: |
+          python3 tools/ci/time_command.py ci-profiles/cli.time.json \
+            timeout --signal=TERM --kill-after=5s 60s bash examples/cli/run_cli_demo.sh
+      - name: Analyze Bazel profiles
+        if: always()
+        run: |
+          python3 tools/ci/summarize_bazel_profiles.py ci-profiles
+          cat ci-profiles/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve build profiles
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ubuntu24-bazel-profiles
+          path: ci-profiles/
+          if-no-files-found: warn
       - name: Preserve test reports
         if: always()
         uses: actions/upload-artifact@v7

@@ -1,0 +1,25 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_static_library", "rust_test")
+
+package(default_visibility = ["//visibility:private"])
+
+# C++ consumers depend on this interface, not the private Rust implementation.
+cc_library(
+    name = "rust_math",
+    hdrs = ["math.h"],
+    visibility = ["//apps/producer:__pkg__"],
+    deps = [":rust_math_impl"],
+)
+
+rust_static_library(
+    name = "rust_math_impl",
+    srcs = ["math.rs"],
+    crate_root = "math.rs",
+    edition = "2021",
+)
+
+rust_test(
+    name = "rust_math_test",
+    crate = ":rust_math_impl",
+    visibility = ["//:__pkg__"],
+)

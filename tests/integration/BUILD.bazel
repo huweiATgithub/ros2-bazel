@@ -1,0 +1,29 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+py_test(
+    name = "launch_integration_test",
+    srcs = [
+        "integration.py",
+        "launch_runner.py",
+    ],
+    main = "launch_runner.py",
+    args = [
+        "$(rootpath integration.py)",
+        "$(rootpath //apps/producer:producer)",
+        "$(rootpath //apps/observer:observer)",
+        "$(rootpath //apps/client:client)",
+    ],
+    # Executables are runtime inputs, not Python import dependencies.
+    data = [
+        "//apps/client:client",
+        "//apps/observer:observer",
+        "//apps/producer:producer",
+    ],
+    visibility = ["//:__pkg__"],
+    deps = [
+        "@launch//:launch",
+        "@launch_testing//:launch_testing",
+    ],
+    timeout = "moderate",
+    tags = ["requires-network"],
+)

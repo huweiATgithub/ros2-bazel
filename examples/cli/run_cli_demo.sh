@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Runtime-only example. Build with Bazel first, then invoke this script under:
-# timeout --signal=TERM --kill-after=5s 60s bash examples/run_cli_demo.sh
+# timeout --signal=TERM --kill-after=5s 60s bash examples/cli/run_cli_demo.sh
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 mkdir -p cli-logs
 
 # Prove that these C++ applications do not depend on a sourced ROS workspace,
@@ -30,15 +30,15 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-./bazel-bin/observer --ros-args -r __node:=cli_observer_one >cli-logs/observer-one.log 2>&1 &
+./bazel-bin/apps/observer/observer --ros-args -r __node:=cli_observer_one >cli-logs/observer-one.log 2>&1 &
 first=$!; pids+=("$first")
-./bazel-bin/observer --ros-args -r __node:=cli_observer_two >cli-logs/observer-two.log 2>&1 &
+./bazel-bin/apps/observer/observer --ros-args -r __node:=cli_observer_two >cli-logs/observer-two.log 2>&1 &
 second=$!; pids+=("$second")
-./bazel-bin/client >cli-logs/client.log 2>&1 &
+./bazel-bin/apps/client/client >cli-logs/client.log 2>&1 &
 client=$!; pids+=("$client")
 # Exercise waiting for a late service provider, as well as direct execution.
 sleep 1
-./bazel-bin/producer >cli-logs/producer.log 2>&1 &
+./bazel-bin/apps/producer/producer >cli-logs/producer.log 2>&1 &
 producer=$!; pids+=("$producer")
 
 # Any nonzero exit or missing expected output fails this example and CI.

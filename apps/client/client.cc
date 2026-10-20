@@ -1,3 +1,4 @@
+#include "libs/demo_protocol/protocol.h"
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <chrono>
@@ -9,9 +10,9 @@ int main(int argc, char** argv) {
   auto absent = node->create_client<std_srvs::srv::SetBool>("deliberately_absent");
   if (absent->wait_for_service(300ms)) return 1;
   std::cout << "ABSENT_SERVICE_TIMEOUT_OK" << std::endl;
-  auto client = node->create_client<std_srvs::srv::SetBool>("calculate");
+  auto client = node->create_client<std_srvs::srv::SetBool>(demo_protocol::kCalculateService);
   if (!client->wait_for_service(25s)) return 2;
-  for (int i = 0; i < 12; ++i) {
+  for (std::size_t i = 0; i < demo_protocol::kServiceCallCount; ++i) {
     auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
     request->data = i % 2 != 0;
     auto future = client->async_send_request(request);

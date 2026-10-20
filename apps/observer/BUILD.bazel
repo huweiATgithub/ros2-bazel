@@ -1,0 +1,15 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "observer",
+    srcs = ["observer.cc"],
+    visibility = [
+        "//examples/cli:__pkg__",
+        "//tests/integration:__pkg__",
+    ],
+    deps = [
+        "//libs/demo_protocol:protocol",
+        "@rclcpp//:rclcpp_library",
+        "@std_msgs//:cc",
+    ],
+)

@@ -1,0 +1,11 @@
+# A build-only aggregate. The script runs the resulting binaries directly,
+# independently of bazel run and the Python launch_testing harness.
+filegroup(
+    name = "demo",
+    srcs = [
+        "run_cli_demo.sh",
+        "//apps/client:client",
+        "//apps/observer:observer",
+        "//apps/producer:producer",
+    ],
+)
