@@ -33,12 +33,12 @@ def generate_test_description():
 
 class CommunicationTests(unittest.TestCase):
     def test_pubsub_and_services(self, proc_output, proc_info, first, second, client, producer):
-        proc_output.assertWaitFor("ABSENT_SERVICE_TIMEOUT_OK", process=client, timeout=15)
-        proc_output.assertWaitFor("PUBLISHED 40", process=producer, timeout=40)
+        proc_output.assertWaitFor("ABSENT_SERVICE_TIMEOUT_OK", process=client, stream="stdout", timeout=15)
+        proc_output.assertWaitFor("PUBLISHED 40", process=producer, stream="stdout", timeout=40)
         for observer in (first, second):
-            proc_output.assertWaitFor("RECEIVED 40 CHECKSUM 23160", process=observer, timeout=15)
+            proc_output.assertWaitFor("RECEIVED 40 CHECKSUM 23160", process=observer, stream="stdout", timeout=15)
             proc_info.assertWaitForShutdown(process=observer, timeout=10)
-        proc_output.assertWaitFor("SERVICE_PASS 12", process=client, timeout=15)
+        proc_output.assertWaitFor("SERVICE_PASS 12", process=client, stream="stdout", timeout=15)
         proc_info.assertWaitForShutdown(process=client, timeout=10)
 
 
