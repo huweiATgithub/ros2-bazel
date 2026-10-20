@@ -73,8 +73,10 @@ def main():
     results = [summarize(path) for path in sorted(directory.glob("*.profile.gz"))]
     (directory / "summary.json").write_text(json.dumps(results, indent=2) + "\n")
     lines = ["# Bazel CI profile summary", "",
-             "Cold means the initial build on this fresh runner. Warm means an unchanged",
-             "repeat in the SAME workspace/server, not a cache restored on another CI runner.",
+             "Initial means the first build on this fresh runner, potentially using a restored",
+             "disk cache; see cache-restore.txt. Older uncached runs label this cold-build.",
+             "Warm means an unchanged repeat in the SAME workspace/server, not a separate",
+             "runner. Compare initial-build across runs to measure cross-runner caching.",
              "Action-processing durations overlap and include scheduling/overhead; they are",
              "not CPU time and must not be added to wall time. Category unions can also overlap.",
              "BEP phase times can overlap when analysis and execution are interleaved.",

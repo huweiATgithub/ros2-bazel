@@ -141,9 +141,11 @@ Module/version resolution is not the build target graph. CI inspects the configu
 
 The [measured baseline report](docs/build-profile.md) analyzes commit `0a7f216`, before custom-message support. It records a 344.26 s cold build versus 3.48 s and 0.43 s unchanged same-workspace repeats; these are not cross-runner cache results. New runs retain the same instrumentation.
 
-CI measures the initial application build on a fresh Ubuntu 24.04 runner, then repeats the identical build twice in the same workspace/server to show warm-cache behavior. Test execution is still forced with `--nocache_test_results`; the direct CLI check remains separate. This is not a cross-runner cache benchmark.
+CI restores [daily immutable repository and disk-action caches](docs/ci-cache.md) using GitHub Actions Cache. The UTC date changes the save key each day; the same-configuration restore prefix selects the latest available earlier snapshot when today's is absent. Successful `main` runs publish at most one snapshot per key/day. Later same-day runs cannot update it.
 
-The [profiling wrapper](tools/ci/profile_bazel.sh) records Bazel JSON traces, Build Event Protocol metrics, console logs and elapsed times. The `ubuntu24-bazel-profiles` artifact contains those files, runner details and a [generated phase/action summary](tools/ci/summarize_bazel_profiles.py). OS setup and Bazel startup are timed separately. Action durations may overlap, so do not sum them as wall-clock time.
+CI measures the initial application build on a fresh Ubuntu 24.04 runner, then repeats the identical build twice in the same workspace/server to show warm-cache behavior. The initial build may use the restored disk cache, so it is labelled `initial-build`, not cold. Test execution is still forced with `--nocache_test_results`; the direct CLI check remains separate. Compare initial-build measurements from separate runners, including cache restore/save overhead, to measure persistent-cache benefit.
+
+The [profiling wrapper](tools/ci/profile_bazel.sh) records Bazel JSON traces, Build Event Protocol metrics, console logs and elapsed times. The `ubuntu24-bazel-profiles` artifact contains those files, runner details, cache keys/hit status/sizes and a [generated phase/action summary](tools/ci/summarize_bazel_profiles.py). OS setup and Bazel startup are timed separately. Action durations may overlap, so do not sum them as wall-clock time.
 
 ## Baseline validation (2026-10-20)
 

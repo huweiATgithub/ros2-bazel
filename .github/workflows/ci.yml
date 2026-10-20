@@ -21,10 +21,41 @@ jobs:
             bash -c 'sudo apt-get update && sudo apt-get install -y curl ca-certificates unzip zip xz-utils'
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
+      - name: Configure daily Bazel caches
+        id: cache-date
+        run: |
+          # Capture the UTC date once, even if the job crosses midnight.
+          echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          mkdir -p "$HOME/.cache/bazel-ci/repository" "$HOME/.cache/bazel-ci/disk"
+          # Cache only portable downloads and action results, never the server/output base.
+          printf 'common --repository_cache=%s\nbuild --disk_cache=%s\n' \
+            "$HOME/.cache/bazel-ci/repository" "$HOME/.cache/bazel-ci/disk" >> "$HOME/.bazelrc"
+      - name: Restore daily Bazel caches
+        id: bazel-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cache/bazel-ci/repository
+            ~/.cache/bazel-ci/disk
+          key: bazel-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock', '.github/workflows/ci.yml', 'tools/ci/profile_bazel.sh') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            bazel-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock', '.github/workflows/ci.yml', 'tools/ci/profile_bazel.sh') }}-
+      - name: Record cache restore metadata
+        env:
+          CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
+          CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
+          CACHE_EXACT_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
+        run: |
+          {
+            printf 'Requested key: %s\n' "$CACHE_PRIMARY_KEY"
+            printf 'Restored key: %s\n' "${CACHE_MATCHED_KEY:-none}"
+            printf 'Exact daily hit: %s\n' "${CACHE_EXACT_HIT:-false}"
+          } | tee ci-profiles/cache-restore.txt
+          cat ci-profiles/cache-restore.txt >> "$GITHUB_STEP_SUMMARY"
       - name: Download Bazel and start server (measured separately)
         run: python3 tools/ci/time_command.py ci-profiles/bazel-startup.time.json bazel version
-      - name: Build C++ and Rust applications (cold runner)
-        run: bash tools/ci/profile_bazel.sh cold-build build //examples/cli:demo
+      - name: Build C++ and Rust applications (fresh runner, restored cache if available)
+        run: bash tools/ci/profile_bazel.sh initial-build build //examples/cli:demo
       - name: Repeat unchanged build (same workspace, warm cache)
         run: |
           bash tools/ci/profile_bazel.sh warm-build-1 build //examples/cli:demo
@@ -48,6 +79,11 @@ jobs:
             echo "Unexpected Python ROS or nonselected middleware dependency" >&2
             exit 1
           fi
+      - name: Record cache sizes
+        if: always()
+        run: |
+          du -sh "$HOME/.cache/bazel-ci/repository" "$HOME/.cache/bazel-ci/disk" \
+            | tee ci-profiles/cache-sizes.txt
       - name: Analyze Bazel profiles
         if: always()
         run: |
@@ -70,3 +106,15 @@ jobs:
             bazel-testlogs/**/test.xml
             cli-logs/*.log
           if-no-files-found: warn
+      - name: Save today's immutable Bazel caches
+        # Only successful trusted main runs publish. PRs and other branches only restore.
+        if: >-
+          success() && github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          steps.bazel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/bazel-ci/repository
+            ~/.cache/bazel-ci/disk
+          key: ${{ steps.bazel-cache.outputs.cache-primary-key }}
