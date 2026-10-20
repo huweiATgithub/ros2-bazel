@@ -1,8 +1,8 @@
-load("@rosidl_default_generators//:defs.bzl", "cc_ros_library", "py_ros_library")
+load("@rosidl_default_generators//:defs.bzl", "cc_ros_library")
 
 package(default_visibility = ["//visibility:private"])
 
-# Generate only the language bindings used by the applications. RCR also builds
+# Generate only the C++ bindings used by the applications. RCR also builds
 # their serialization/typesupport; no generated source is checked into the repo.
 cc_ros_library(
     name = "cc",
@@ -13,11 +13,3 @@ cc_ros_library(
     ],
 )
 
-py_ros_library(
-    name = "py",
-    deps = ["//interfaces/demo_interfaces/msg:Sample"],
-    visibility = [
-        "//apps/python_observer:__pkg__",
-        "//tests/interfaces:__pkg__",
-    ],
-)

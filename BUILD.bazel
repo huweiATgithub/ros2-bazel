@@ -3,7 +3,6 @@ test_suite(
     name = "tests",
     tests = [
         "//libs/rust_math:rust_math_test",
-        "//tests/interfaces:bindings_test",
         "//tests/integration:launch_integration_test",
     ],
 )

@@ -23,7 +23,7 @@ jobs:
         uses: bazelbuild/setup-bazelisk@v3
       - name: Download Bazel and start server (measured separately)
         run: python3 tools/ci/time_command.py ci-profiles/bazel-startup.time.json bazel version
-      - name: Build C++, Rust and Python applications (cold runner)
+      - name: Build C++ and Rust applications (cold runner)
         run: bash tools/ci/profile_bazel.sh cold-build build //examples/cli:demo
       - name: Repeat unchanged build (same workspace, warm cache)
         run: |
@@ -35,6 +35,19 @@ jobs:
         run: |
           python3 tools/ci/time_command.py ci-profiles/cli.time.json \
             timeout --signal=TERM --kill-after=5s 60s bash examples/cli/run_cli_demo.sh
+      - name: Verify the configured application and test dependency scope
+        run: |
+          # Expand the suite first: cquery requires actual configured test targets.
+          test_targets=$(bazel query 'tests(//:tests)' --output=label)
+          bazel cquery "deps(set(//examples/cli:demo ${test_targets}))" \
+            --include_aspects --output=label > ci-profiles/configured-dependencies.txt
+          # Fast-CDR and ROSIDL FastRTPS typesupport are valid generator deps.
+          # Full unused middleware and the Python ROS client are not.
+          if grep -E '^@@?(rclpy|fastdds|rmw_fastrtps_cpp|rmw_fastrtps_dynamic_cpp|rmw_zenoh_cpp)([+~][^/]*)?//' \
+              ci-profiles/configured-dependencies.txt; then
+            echo "Unexpected Python ROS or nonselected middleware dependency" >&2
+            exit 1
+          fi
       - name: Analyze Bazel profiles
         if: always()
         run: |

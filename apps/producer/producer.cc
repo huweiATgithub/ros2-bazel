@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
   uint64_t sequence = 0;
   std::vector<uint64_t> history;
   auto timer = node->create_wall_timer(25ms, [&] {
-    // Discover both C++ observers and the independent Python observer first.
+    // Discover both independent C++ observer processes before publishing.
     if (publisher->get_subscription_count() < demo_protocol::kSubscriberCount ||
         sequence == demo_protocol::kSampleCount) return;
     demo_interfaces::msg::Sample msg;

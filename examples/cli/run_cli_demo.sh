@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 mkdir -p cli-logs
 
-# Prove that these C++/Python applications do not depend on a sourced ROS workspace,
+# Prove that these C++ applications do not depend on a sourced ROS workspace,
 # Bazel's launcher environment, or a caller's Python/shared-library search path.
 unset AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH ROS_PACKAGE_PATH
 unset PYTHONPATH LD_LIBRARY_PATH RUNFILES_DIR RUNFILES_MANIFEST_FILE TEST_WORKSPACE
@@ -34,8 +34,6 @@ trap 'exit 143' TERM
 first=$!; pids+=("$first")
 ./bazel-bin/apps/observer/observer --ros-args -r __node:=cli_observer_two >cli-logs/observer-two.log 2>&1 &
 second=$!; pids+=("$second")
-./bazel-bin/apps/python_observer/python_observer >cli-logs/python-observer.log 2>&1 &
-python_observer=$!; pids+=("$python_observer")
 ./bazel-bin/apps/client/client >cli-logs/client.log 2>&1 &
 client=$!; pids+=("$client")
 # Exercise waiting for a late service provider, as well as direct execution.
@@ -46,11 +44,9 @@ producer=$!; pids+=("$producer")
 # Any nonzero exit or missing expected output fails this example and CI.
 wait "$first"
 wait "$second"
-wait "$python_observer"
 wait "$client"
 grep -Fxq 'RECEIVED 40 CHECKSUM 23160 CUSTOM_FIELDS_OK' cli-logs/observer-one.log
 grep -Fxq 'RECEIVED 40 CHECKSUM 23160 CUSTOM_FIELDS_OK' cli-logs/observer-two.log
-grep -Fxq 'PYTHON_RECEIVED 40 CHECKSUM 23160 CUSTOM_FIELDS_OK' cli-logs/python-observer.log
 grep -Fxq 'ABSENT_SERVICE_TIMEOUT_OK' cli-logs/client.log
 grep -Fxq 'SERVICE_PASS 12' cli-logs/client.log
 grep -Fxq 'PUBLISHED 40' cli-logs/producer.log
@@ -60,4 +56,4 @@ grep -Fxq 'SERVICE 12 425' cli-logs/producer.log
 kill -TERM "$producer"
 wait "$producer"
 pids=()
-echo 'CLI_DEMO_PASS: three C++/Python subscribers, custom messages, 12 service calls, five clean exits'
+echo 'CLI_DEMO_PASS: two C++ subscribers, custom messages, 12 service calls, four clean exits'

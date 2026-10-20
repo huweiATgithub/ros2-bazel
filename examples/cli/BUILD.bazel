@@ -7,6 +7,5 @@ filegroup(
         "//apps/client:client",
         "//apps/observer:observer",
         "//apps/producer:producer",
-        "//apps/python_observer:python_observer",
     ],
 )
