@@ -31,6 +31,15 @@ The root requests `ros_core lyrical.2026-06-08.rcr.2`. Bazel minimum-version sel
 
 The registry's full module graph contains optional desktop dependencies, but this repository does not build its desktop examples. Runtime binaries link only the selected core dependencies and Rust logic. `--dynamic_mode=off` does not make glibc fully static.
 
-## Validation status
+## Verified validation (2026-10-20)
 
-CI is configured for a native GitHub-hosted `ubuntu-24.04` runner. Check the Actions run for the actual result; configuration alone is not evidence of a passing run. A prior simpler C++-only experiment built on official Ubuntu 24.04.3 userspace without ROS source patches. That environment denied DDS interface enumeration, so it did not establish runtime success. This expanded Rust/launch suite is a separate test and must pass CI before runtime compatibility is claimed.
+[GitHub Actions run 39426065208](https://github.com/huweiATgithub/ros2-bazel/actions/runs/39426065208) passed on the native `ubuntu-24.04` runner at commit `30033f1b8fd4ddbed7548c87e07a078a17957b88`.
+
+- Full C++/Rust build and both Bazel test targets passed: 410 seconds, 4065 actions.
+- `launch_integration_test` passed in 2.8 seconds, checking both subscribers, all 12 service responses, the absent-service timeout and clean process exit.
+- `rust_math_test` passed. No test results were reused (`--nocache_test_results`).
+- Test logs and JUnit XML are available in the run's `ubuntu24-test-results` artifact.
+
+The first run built and communicated successfully but exposed a harness mistake: `launch_testing` output assertions default to stderr, while the demos write stdout. The corrected assertions explicitly select stdout; no communication checks were removed or weakened. The failed run also confirmed that a failing launch assertion propagates to a failing Bazel test.
+
+This establishes the demonstrated core-only workload on Ubuntu 24.04, not full ROS platform certification, desktop support or compatibility with every package or hardware driver. The earlier local sandbox denied DDS interface enumeration; GitHub CI provided the unrestricted local networking needed for the actual runtime test.
