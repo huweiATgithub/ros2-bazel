@@ -19,10 +19,14 @@ jobs:
           sudo apt-get install -y curl ca-certificates unzip zip xz-utils
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
-      - name: Build C++ and Rust, then run unit and launch tests
+      - name: Build C++ and Rust applications
         run: |
           bazel version
-          bazel test //:rust_math_test //:launch_integration_test --test_output=errors --nocache_test_results
+          bazel build //:producer //:observer //:client
+      - name: Run unit and launch tests with Bazel
+        run: bazel test //:rust_math_test //:launch_integration_test --test_output=errors --nocache_test_results
+      - name: Run built applications directly from the CLI
+        run: timeout --signal=TERM --kill-after=5s 60s bash examples/run_cli_demo.sh
       - name: Preserve test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -31,4 +35,5 @@ jobs:
           path: |
             bazel-testlogs/**/test.log
             bazel-testlogs/**/test.xml
+            cli-logs/*.log
           if-no-files-found: warn

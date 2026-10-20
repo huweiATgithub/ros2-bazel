@@ -25,6 +25,38 @@ bazel test //:rust_math_test //:launch_integration_test --test_output=errors --n
 
 No `source /opt/ros/...` step is needed. DDS requires permission to enumerate network interfaces and communicate over local UDP. The integration test uses ROS domain 93 and localhost-only discovery; do not run concurrent copies in that domain. Test deadlines are bounded; subscriber or service timeouts fail the test.
 
+## How it works
+
+- **Build dependencies, not a sourced workspace:** `MODULE.bazel` resolves ROS packages from RCR and other dependencies from BCR. `BUILD.bazel` declares each target's libraries and runtime data. Bazel supplies the compiler, Rust and Python toolchains and dependency paths; it does not generate a colcon-style `install/setup.bash` or require an installed ROS distribution.
+- **Runtime files still matter:** Bazel assembles each target's declared runtime files in a `.runfiles` tree. RCR's `ament_index` rules arrange resources/plugins there like a ROS prefix, and its patched lookup code can find that tree without a sourced `AMENT_PREFIX_PATH`. `bazel run`/`bazel test` provide the runfiles context; an already-set `AMENT_PREFIX_PATH` is still respected, so use a fresh, unsourced shell.
+- **This demo is simpler:** `.bazelrc` selects CycloneDDS at build time and uses `--dynamic_mode=off`, linking the ROS libraries, message typesupport and Rust code into these C++ executables. `RMW_IMPLEMENTATION` is not a runtime middleware switch for this build. ROS settings such as `ROS_DOMAIN_ID` and discovery range still apply. The executables are not fully static: the system loader/glibc and compatible OS/architecture are still required.
+
+### Run the built binaries from a shell
+
+From the repository root in a fresh shell:
+
+```sh
+bazel build //:producer //:observer //:client
+timeout --signal=TERM --kill-after=5s 60s bash examples/run_cli_demo.sh
+```
+
+The [CLI example](examples/run_cli_demo.sh) runs `./bazel-bin/producer`, two copies of `./bazel-bin/observer`, and `./bazel-bin/client` directly, without `bazel run`, `launch_testing`, `ros2 run` or sourcing ROS. It checks all four exit codes, both subscribers' `RECEIVED 40 CHECKSUM 23160`, the client's `SERVICE_PASS 12`, and the producer's output, then shuts the producer down. Logs are saved in `cli-logs/`. CI runs these same commands after the build, separately from the Bazel tests. It uses localhost discovery and domain 94 by default; choose a different unused domain with `ROS_DOMAIN_ID=95 timeout ...` for a concurrent run.
+
+For interactive use, set the same environment in **four terminals**, all at the repository root:
+
+```sh
+export ROS_DOMAIN_ID=94 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+# Run one command per terminal:
+./bazel-bin/producer
+./bazel-bin/observer --ros-args -r __node:=observer_one
+./bazel-bin/observer --ros-args -r __node:=observer_two
+./bazel-bin/client
+```
+
+Start all four within 25 seconds. After both observers and the client finish successfully, press Ctrl-C in the producer terminal. The producer waits for two subscribers and expects exactly 12 service calls before a successful shutdown. Alternatively, `bazel run //:producer -- --ros-args -r __node:=my_producer` builds and starts that target in Bazel's runtime context, passing arguments after `--`.
+
+Keep the build outputs and adjacent runfiles together. Direct execution of these C++ demos does not mean every ROS/Python/plugin target is a standalone file; declare its runtime data and package the complete runtime tree for deployment. See RCR's [runtime-data](https://github.com/openrobotics/ros-central-registry#runtime-data) and [static-compilation](https://github.com/openrobotics/ros-central-registry#static-compilation) explanations.
+
 ## Versions and scope
 
 The root requests `ros_core lyrical.2026-06-08.rcr.2`. Bazel minimum-version selection can select later compatible transitive module versions: the baseline resolved `rosdistro lyrical.2026-06-08.rcr.8`. The checked-in lockfile records registry resolution, not OS certification. LLVM and Python toolchains are downloaded by Bazel; Rust is pinned to 1.93.0. CycloneDDS is selected as the RMW.
