@@ -9,8 +9,14 @@ jobs:
   core-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # Independently bounded, 6 GiB total before every snapshot save.
+      BAZEL_REPOSITORY_CACHE_MAX_BYTES: "4294967296"
+      BAZEL_DISK_CACHE_MAX_BYTES: "2147483648"
     steps:
       - uses: actions/checkout@v7
+      - name: Test cache size enforcement
+        run: python3 -m unittest discover -s tools/ci -p 'test_prune_bazel_cache.py' -v
       - name: Verify OS and install build prerequisites
         run: |
           . /etc/os-release
@@ -27,7 +33,7 @@ jobs:
           # Capture the UTC date once, even if the job crosses midnight.
           echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
           mkdir -p "$HOME/.cache/bazel-ci/repository" "$HOME/.cache/bazel-ci/disk"
-          # Cache only portable downloads and action results, never the server/output base.
+          # Cache portable repository data and action results, never the server/output base.
           printf 'common --repository_cache=%s\nbuild --disk_cache=%s\n' \
             "$HOME/.cache/bazel-ci/repository" "$HOME/.cache/bazel-ci/disk" >> "$HOME/.bazelrc"
       - name: Restore daily Bazel caches
@@ -37,9 +43,9 @@ jobs:
           path: |
             ~/.cache/bazel-ci/repository
             ~/.cache/bazel-ci/disk
-          key: bazel-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock', '.github/workflows/ci.yml', 'tools/ci/profile_bazel.sh') }}-${{ steps.cache-date.outputs.date }}
+          key: bazel-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock', '.github/workflows/ci.yml', 'tools/ci/profile_bazel.sh', 'tools/ci/prune_bazel_cache.py') }}-${{ steps.cache-date.outputs.date }}
           restore-keys: |
-            bazel-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock', '.github/workflows/ci.yml', 'tools/ci/profile_bazel.sh') }}-
+            bazel-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock', '.github/workflows/ci.yml', 'tools/ci/profile_bazel.sh', 'tools/ci/prune_bazel_cache.py') }}-
       - name: Record cache restore metadata
         env:
           CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
@@ -66,6 +72,22 @@ jobs:
         run: |
           python3 tools/ci/time_command.py ci-profiles/cli.time.json \
             timeout --signal=TERM --kill-after=5s 60s bash examples/cli/run_cli_demo.sh
+      - name: Test runtime archive checks
+        run: python3 -m unittest discover -s packaging -p 'test_*.py' -v
+      - name: Build runtime archive with Bazel
+        run: |
+          bash tools/ci/profile_bazel.sh package build //packaging:demo_archive
+          mkdir -p runtime-artifact
+          cp bazel-bin/packaging/ros2-bazel-demo-linux-x86_64.tar.gz runtime-artifact/
+          (cd runtime-artifact && sha256sum ros2-bazel-demo-linux-x86_64.tar.gz > SHA256SUMS)
+          tar -tzf runtime-artifact/ros2-bazel-demo-linux-x86_64.tar.gz > ci-profiles/package-contents.txt
+      - name: Upload runtime archive for the separate consumer
+        uses: actions/upload-artifact@v7
+        with:
+          name: ros2-bazel-runtime-ubuntu24-x86_64
+          path: runtime-artifact/
+          compression-level: 0
+          if-no-files-found: error
       - name: Verify the configured application and test dependency scope
         run: |
           # Expand the suite first: cquery requires actual configured test targets.
@@ -79,11 +101,27 @@ jobs:
             echo "Unexpected Python ROS or nonselected middleware dependency" >&2
             exit 1
           fi
+      - name: Enforce cache size limits before archiving
+        id: prune-cache
+        shell: bash
+        run: |
+          # No Bazel commands may run after this point: repository trees can be
+          # symlinked from the output base, and background GC must be stopped.
+          bazel shutdown
+          python3 tools/ci/prune_bazel_cache.py \
+            --cache-root "$HOME/.cache/bazel-ci" \
+            --repository-max-bytes "$BAZEL_REPOSITORY_CACHE_MAX_BYTES" \
+            --disk-max-bytes "$BAZEL_DISK_CACHE_MAX_BYTES" \
+            | tee ci-profiles/cache-prune.json
+          cat ci-profiles/cache-prune.json >> "$GITHUB_STEP_SUMMARY"
       - name: Record cache sizes
         if: always()
         run: |
-          du -sh "$HOME/.cache/bazel-ci/repository" "$HOME/.cache/bazel-ci/disk" \
-            | tee ci-profiles/cache-sizes.txt
+          # A zero budget or empty cache may remove the root entirely.
+          for cache in repository disk; do
+            path="$HOME/.cache/bazel-ci/$cache"
+            if [[ -d "$path" ]]; then du -sh "$path"; else printf '0\t%s\n' "$path"; fi
+          done | tee ci-profiles/cache-sizes.txt
       - name: Analyze Bazel profiles
         if: always()
         run: |
@@ -109,7 +147,8 @@ jobs:
       - name: Save today's immutable Bazel caches
         # Only successful trusted main runs publish. PRs and other branches only restore.
         if: >-
-          success() && github.ref == 'refs/heads/main' &&
+          success() && steps.prune-cache.outcome == 'success' &&
+          github.ref == 'refs/heads/main' &&
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
           steps.bazel-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -118,3 +157,45 @@ jobs:
             ~/.cache/bazel-ci/repository
             ~/.cache/bazel-ci/disk
           key: ${{ steps.bazel-cache.outputs.cache-primary-key }}
+
+  packaged-runtime:
+    needs: core-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download only the runtime artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ros2-bazel-runtime-ubuntu24-x86_64
+          path: runtime-artifact
+      - name: Verify, relocate and run the packaged applications
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          test "$ID" = ubuntu && test "$VERSION_ID" = 24.04
+          test "$(uname -m)" = x86_64
+          test ! -e .git
+          (cd runtime-artifact && sha256sum -c SHA256SUMS)
+          mkdir -p "$RUNNER_TEMP/standalone-consumer" package-logs
+          tar -xzf runtime-artifact/ros2-bazel-demo-linux-x86_64.tar.gz \
+            -C "$RUNNER_TEMP/standalone-consumer"
+          package="$RUNNER_TEMP/standalone-consumer/ros2-bazel-demo"
+          # The audit rejects broken/absolute runfile links and undeclared .so
+          # dependencies; its report lists actual ELF interpreter/NEEDED/RPATH.
+          env -i PATH=/usr/bin:/bin python3 "$package/verify_runtime.py" \
+            > package-logs/runtime-inspection.json
+          cat package-logs/runtime-inspection.json
+          env -i PATH=/usr/bin:/bin ROS_DOMAIN_ID=96 \
+            timeout --signal=TERM --kill-after=5s 60s \
+            python3 "$package/run_demo.py" --log-dir "$GITHUB_WORKSPACE/package-logs" \
+            | tee package-logs/smoke.log
+          grep -q '^PACKAGE_DEMO_PASS:' package-logs/smoke.log
+          echo 'Runtime archive passed on a separate Ubuntu 24.04 runner without checkout, invoking Bazel or ROS setup, or restoring build cache.' \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve standalone runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ubuntu24-packaged-runtime-results
+          path: package-logs/
+          if-no-files-found: warn

@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 cli-logs/
 ci-profiles/
+package-logs/
+runtime-inspection.json

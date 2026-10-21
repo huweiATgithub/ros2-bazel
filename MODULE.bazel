@@ -1,4 +1,5 @@
 module(name = "ros2_bazel_demo")
+bazel_dep(name = "rules_pkg", version = "1.3.0")
 bazel_dep(name = "ros_core", version = "lyrical.2026-06-08.rcr.2")
 bazel_dep(name = "rclcpp", version = "0.0.0")
 bazel_dep(name = "builtin_interfaces", version = "0.0.0")

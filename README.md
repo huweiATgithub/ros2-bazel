@@ -14,6 +14,7 @@ A core-only compatibility experiment with [ROS Central Registry](https://github.
 - A C++ client verifies an absent-service timeout, waits for a delayed server, and checks 12 alternating service calls against exact expected Rust results.
 - Python ROS `launch_testing` manages the four C++ processes, asserts their observable results and checks all exit codes, including graceful server shutdown.
 - Rust unit tests also run as Bazel tests. The Python harness starts executables and checks output/exit codes; it does not import rclpy or generated ROS messages.
+- Bazel packages the applications and declared runfiles into a tarball. A separate Ubuntu 24.04 CI job downloads and runs that artifact without checkout, Bazel, ROS setup or build caches.
 
 ## Run
 
@@ -42,6 +43,7 @@ apps/
   client/                       # :client, C++ service verifier
 tests/integration/              # :launch_integration_test, Python process-level test
 examples/cli/                   # :demo build aggregate plus run_cli_demo.sh
+packaging/                      # :demo_archive, relocatable runtime tarball and smoke runner
 ```
 
 A [Bazel package](https://bazel.build/concepts/build-ref#packages) is a source/build boundary, not a separate Bzlmod module. A [Bzlmod module](https://bazel.build/external/module) is the dependency-versioning unit described by `MODULE.bazel`; do not add one per local package. A ROS package normally has `package.xml` metadata for the ROS ecosystem. These local packages deliberately use Bazel only, not a colcon/ament workspace; ROS dependencies such as `rclcpp`, `builtin_interfaces`, and `std_srvs` come from RCR as external modules. The terms are not interchangeable.
@@ -60,7 +62,7 @@ examples/cli:demo --srcs--> CLI script + all three application targets
 
 For example, `apps/producer/BUILD.bazel` declares `deps = ["//libs/rust_math:rust_math", "//libs/demo_protocol:protocol", ...]`. The prefix `//` means this repository, `libs/rust_math` is the package, and `rust_math` after `:` is the target. Inside that library package, `:rust_math_impl` is a same-package label. `@rclcpp//:rclcpp_library` instead refers to an external repository.
 
-The C++ `rust_math` interface exports `math.h` and transitively links the private Rust static library. Only the producer package can depend on it. The protocol library permits the three C++ app packages; the generated bindings permit only the producer and observer packages; the executables permit the integration-test and CLI-example packages. These [visibility](https://bazel.build/concepts/visibility) declarations enforce the boundaries rather than making everything public. They restrict dependencies, not explicit command-line builds.
+The C++ `rust_math` interface exports `math.h` and transitively links the private Rust static library. Only the producer package can depend on it. The protocol library permits the three C++ app packages; the generated bindings permit only the producer and observer packages; the executables permit the integration-test, CLI-example and packaging packages. These [visibility](https://bazel.build/concepts/visibility) declarations enforce the boundaries rather than making everything public. They restrict dependencies, not explicit command-line builds.
 
 The integration test declares executables in `data`, not `deps`, because they are runtime processes rather than Python imports. Its `$(rootpath //apps/producer:producer)` arguments resolve the declared binaries in Bazel's runfiles tree. The shared protocol header contains names and counts only: the observers' formula/checksum and the client's expected service responses remain independent of Rust.
 
@@ -128,6 +130,36 @@ export ROS_DOMAIN_ID=94 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 Start all four within 25 seconds. After both observers and the client finish successfully, press Ctrl-C in the producer terminal. The producer waits for two subscribers and expects exactly 12 service calls before a successful shutdown. Alternatively, `bazel run //apps/producer:producer -- --ros-args -r __node:=my_producer` builds and starts that target in Bazel's runtime context, passing arguments after `--`.
 
 Keep the build outputs and adjacent runfiles together. Direct execution does not make every ROS/plugin target a standalone file; declare its runtime data and package the complete runtime tree for deployment. See RCR's [runtime-data](https://github.com/openrobotics/ros-central-registry#runtime-data) and [static-compilation](https://github.com/openrobotics/ros-central-registry#static-compilation) explanations.
+
+### Package with Bazel, run on another machine
+
+On the Ubuntu 24.04 x86_64 builder:
+
+```sh
+bazel build //packaging:demo_archive
+# Transfer this one file to a different compatible machine:
+ls -lh bazel-bin/packaging/ros2-bazel-demo-linux-x86_64.tar.gz
+```
+
+On the consumer, from a directory containing the downloaded archive:
+
+```sh
+tar -xzf ros2-bazel-demo-linux-x86_64.tar.gz
+python3 ros2-bazel-demo/verify_runtime.py > runtime-inspection.json
+timeout --signal=TERM --kill-after=5s 60s \
+  python3 ros2-bazel-demo/run_demo.py --log-dir "$PWD/package-logs"
+```
+
+The consumer does not run Bazel or need a source checkout, compiler, ROS installation, `launch_testing`, `rclpy`, or sourced workspace. The packaged runner uses only Python's standard library, starts all four processes from an unrelated working directory with a clean environment, and requires both subscribers' complete custom-message checks, all 12 alternating Rust service results (35 and 425), the absent-service timeout, and four zero exit codes. It ends with `PACKAGE_DEMO_PASS`. Domain 96 is used by default; set `ROS_DOMAIN_ID` to another unused domain for concurrent runs.
+
+How packaging works:
+
+- [`packaging/BUILD.bazel`](packaging/BUILD.bazel) uses native [`rules_pkg` 1.3.0](https://github.com/bazelbuild/rules_pkg/releases/tag/1.3) `pkg_tar` and `pkg_files` rules. The tarball is an ordinary Bazel target whose inputs are the application targets and runtime support files, not an ad-hoc archive of the checkout or build cache.
+- `include_runfiles = True` materializes declared runfiles, root-symlink resources and repository mappings beside each executable. Package-relative executable paths and runtime layout remain intact. Deterministic archive timestamps and explicit permissions make this a cacheable build action; the archive contains no producer-machine absolute symlinks.
+- `--dynamic_mode=off` statically links this demo's ROS/Rust code, **not the entire operating system ABI**. The archive targets Ubuntu 24.04 x86_64 and still needs a compatible ELF loader/glibc/C/C++ runtime. [`verify_runtime.py`](packaging/verify_runtime.py) records the actual ELF interpreter, NEEDED/RPATH entries, `ldd` resolution, and file SHA-256 inventory. It rejects unresolved libraries, broken/external symlinks, and non-platform libraries resolved outside the bundle. It does not promise universal Linux portability or copy host glibc.
+- The [CI workflow](.github/workflows/ci.yml) builds and uploads `ros2-bazel-runtime-ubuntu24-x86_64` in `core-integration`. `packaged-runtime` is a new, separate `ubuntu-24.04` job that only downloads the artifact, extracts it at a new path, audits it, and runs the packaged demo. There is no checkout, cache restore, Bazel, ROS setup or build step in that job. The tarball preserves permissions across the artifact handoff. The original unit and Python launch tests remain on the builder.
+
+See the [bundled runtime README](packaging/README.md) for requirements, layout, commands and limits. The audit tools (`readelf` and `ldd`), Python 3 and coreutils `timeout` are already present on GitHub's Ubuntu 24.04 runners. DDS still requires local UDP and network-interface enumeration.
 
 ## Versions and scope
 

@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "name": "ros2-bazel-demo",
+  "tested_platform": "Ubuntu 24.04 x86_64",
+  "build_target": "//packaging:demo_archive",
+  "middleware": "CycloneDDS, selected at build time",
+  "executables": [
+    "apps/producer/producer",
+    "apps/observer/observer",
+    "apps/client/client"
+  ],
+  "system_requirements": [
+    "Compatible Linux loader, glibc and C/C++ runtime libraries",
+    "Python 3 standard library for the smoke runner",
+    "Local UDP and network-interface enumeration for DDS"
+  ],
+  "verification_tools": ["readelf", "ldd"],
+  "not_included": ["Bazel", "ROS installation", "rclpy", "Python launch_testing", "C++/Rust build toolchains"]
+}

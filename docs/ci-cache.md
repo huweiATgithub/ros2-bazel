@@ -7,14 +7,15 @@ No remote-cache service, credentials or paid storage setting is configured.
 
 ## What is cached
 
-- `$HOME/.cache/bazel-ci/repository`: downloaded external repository archives,
-  selected explicitly with `--repository_cache`.
+- `$HOME/.cache/bazel-ci/repository`: downloaded external repository archives
+  (`content_addressable/`) **and Bazel 9's fetched repository contents**
+  (`contents/`), selected explicitly with `--repository_cache`.
 - `$HOME/.cache/bazel-ci/disk`: Bazel action-result metadata and
   content-addressed outputs, selected explicitly with `--disk_cache`.
 
 The workflow writes these flags into the ephemeral runner's user `.bazelrc`
 before any Bazel command. It does **not** cache the Bazel server, output base,
-workspace symlinks, extracted execution trees or the entire home directory.
+workspace symlinks, execution/output trees or the entire home directory.
 Module loading, extraction and analysis can still take time on a fresh runner.
 The existing `--remote_upload_local_results=false` remains: no external Bazel
 remote cache is enabled, while the local disk cache can still read and write.
@@ -34,7 +35,8 @@ bazel-v1-<runner OS>-<runner architecture>-ubuntu24-<configuration hash>-YYYY-MM
 ```
 
 The configuration hash covers `.bazelversion`, `.bazelrc`, `MODULE.bazel`,
-`MODULE.bazel.lock`, the CI workflow and the profiling command wrapper. This
+`MODULE.bazel.lock`, the CI workflow, profiling command wrapper and cache
+pruning script. This
 separates Bazel/toolchain/dependency/configuration changes. The explicit `v1`
 prefix can be bumped to invalidate the cache schema. Application source files
 are deliberately not in this outer key: Bazel's action keys track declared
@@ -52,8 +54,10 @@ There is no broader cross-configuration fallback.
 2. Build, run the forced unit/launch tests, run the direct CLI check and inspect
    the configured dependency scope. Missing or invalidated action entries build
    normally and populate the local disk cache.
-3. After all checks/artifact steps succeed, a trusted `push` or
-   `workflow_dispatch` on `main` saves the populated directories under today's
+3. After all Bazel builds/tests and runtime checks, shut down Bazel and enforce
+   the size budgets below. No later step may run Bazel against these caches.
+   After pruning and artifact steps succeed, a trusted `push` or
+   `workflow_dispatch` on `main` saves the bounded directories under today's
    key. Other branches and pull requests restore only.
 4. The first successful save wins. Subsequent same-day exact hits skip saving;
    new entries produced later that day are not persisted in that immutable
@@ -64,10 +68,68 @@ This is daily rotation **when CI runs**, not a scheduled daily build. Cache
 misses are allowed and produce an ordinary build. No tests or build steps are
 skipped because the GitHub cache reports an exact hit.
 
+## Explicit snapshot size budgets
+
+Every successfully saved snapshot is bounded independently of GitHub eviction:
+
+- Repository downloads + fetched contents: **4 GiB** (4,294,967,296 bytes).
+- Disk action results + output blobs: **2 GiB** (2,147,483,648 bytes).
+- Combined cache trees: **at most 6 GiB**, before compression.
+
+The limits are explicit job environment variables in `.github/workflows/ci.yml`.
+The previous measured working set was approximately 3.5 GiB of repository cache
+and 282 MiB of disk cache, so these limits preserve that working set with room
+for changed actions while preventing unlimited accumulation across daily
+snapshots. Archive compression usually makes GitHub storage smaller; the bound
+is not a promise about peak disk use during a build, the uncached output base,
+or the sum of historical GitHub snapshots.
+
+`tools/ci/prune_bazel_cache.py` runs synchronously **after `bazel shutdown`** and
+before saving. It uses only Python's standard library. It counts the larger of
+logical length and allocated blocks for every entry, including directory
+metadata and symlink text; hard links are conservatively counted separately.
+It never follows symlinks. A final remeasurement must satisfy each limit, and
+any shutdown, accounting or deletion failure prevents the save. The step uses
+Bash's pipefail so writing the report through `tee` cannot hide a failure.
+
+Entries too large to fit on their own are discarded first. Remaining entries
+are evicted oldest-first, with path order breaking timestamp ties:
+
+- Download entries are whole `content_addressable/<algorithm>/<digest>/`
+  directories, including their canonical-ID markers. The downloaded `file`'s
+  mtime records recent use.
+- Fetched contents are whole `contents/<inputs-hash>/` directories, including
+  every UUID tree and its `.recorded_inputs` marker. The newest marker's mtime
+  is used. Files and meaningful empty directories inside a retained repository
+  are never pruned independently.
+- Disk entries are individual AC/CAS files, ordered like Bazel's own disk GC.
+  Bazel 9.0.0 checks referenced output blobs before accepting an action hit;
+  missing blobs cause a miss and rebuild, not an incomplete accepted result.
+
+This collector is for the dedicated, quiescent CI directories, **not a shared
+or live developer cache**. Bazel may symlink fetched repositories from the
+output base into `repository/contents`, which is why shutdown and no later
+Bazel commands are essential. Its idle GC flags alone do not guarantee that
+collection finishes before a short CI job archives the cache. Bazel's normal
+14-day fetched-contents age cleanup is not a byte limit and does not bound the
+download cache. No background-GC delay or additional Bazel GC build dependency
+is needed here.
+
+Sources for the pinned Bazel 9.0.0 layout and semantics:
+[repository downloads](https://github.com/bazelbuild/bazel/blob/9.0.0/src/main/java/com/google/devtools/build/lib/bazel/repository/cache/DownloadCache.java),
+[fetched contents](https://github.com/bazelbuild/bazel/blob/9.0.0/src/main/java/com/google/devtools/build/lib/bazel/repository/cache/LocalRepoContentsCache.java),
+[disk collector](https://github.com/bazelbuild/bazel/blob/9.0.0/src/main/java/com/google/devtools/build/lib/remote/disk/DiskCacheGarbageCollector.java),
+[disk integrity checks](https://github.com/bazelbuild/bazel/blob/9.0.0/src/main/java/com/google/devtools/build/lib/remote/disk/DiskCacheClient.java).
+
+The workflow runs collector regressions for missing/empty caches, both budgets,
+oversized entries, deterministic order, marker/tree integrity, sparse files,
+hard links, symlinks and rejected special files before building.
+
 ## Verification and limits
 
 `ci-profiles/cache-restore.txt` records the requested key, matched key and exact
-hit status. `cache-sizes.txt` records uncompressed directory sizes. The action
+hit status. `cache-prune.json` records each limit, before/after accounted bytes
+and number of evicted entries. `cache-sizes.txt` records post-prune `du` sizes. The action
 logs show archive transfer/save details; workflow step timestamps give their
 elapsed overhead. The profiler retains the first build as `initial-build`,
 two unchanged same-server repeats and forced tests. A GitHub archive hit alone
@@ -86,7 +148,8 @@ same-day rerun verifies exact-key restoration, not a real cross-day rollover.
 GitHub's default repository cache allowance is 10 GB; inactive entries can
 expire after seven days, and older entries can be evicted when storage fills.
 Daily snapshots share that repository-wide budget, so several large copies
-may evict each other. This change does not raise storage limits or enable
+may evict each other. That historical-snapshot policy does not bound a restored
+cache that is extended and saved again; the explicit pre-save byte budgets do. This change does not raise storage limits or enable
 billing. See [GitHub's cache limits and key matching](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
 for current policy and branch visibility.
 
